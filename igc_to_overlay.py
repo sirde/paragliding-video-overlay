@@ -1,34 +1,45 @@
-##
-# REMPLIR UNIQUEMENT LES 4 PROCHAINES LIGNES
-##
+# Configure only this:
 
+# MODE TEST
+TEST_MODE = False  # True = Generates test_overlay.png, False = generates video
 
-# MODE TEST - Mettre à True pour générer une seule image de test
-TEST_MODE = False  # True = génère test_overlay.png, False = génère la vidéo complète
+# TODO: make auto switch between summer/winter saving time
+HEURE_ETE = 1  # Add 1 if summer time
+TOTAL_FLIGHT_DIST = 78  # Total distance with "3 points de contournenment"
+speed_acc = 16  # Acceleration factor for video, typically x16
 
-HEURE_ETE = 1  # rajoute 1 à l'heure si on est à l'heure d'été
-TOTAL_FLIGHT_DIST = 78  # la distance total parcouru en mode "3 points de contournenment"
-speed_acc = 16  # l'accélération utilisée pour la vidéo, moi je suis en X16
-file_url =  None #"https://www.syride.com/scripts/downloadIGC.php?idSession=2121335&key=0356809495924"  # day2
+# Url to igc, or local path to igc, at least one
+file_url =  None #"https://www.syride.com/scripts/downloadIGC.php?idSession=2121335&key=0356809495924"
 # file_path = None
 # file_path = r"C:\Users\sirde\Dropbox\Parapente\Vercofly\Tracks 2025\CEDRIC-GERBER (2).igc"
-file_path = r"C:\Users\sirde\Dropbox\Parapente\Overlay\2025-09-27-XCT-CGE-13.igc"
+file_path = r"C:\Users\sirde\Dropbox\Parapente\Overlay\2025-05-18-XCT-CGE-12.igc"
 qualite_compression = 15  # valeur à augmenter pour avoir une meilleure qualité, 10 est bien suffisant
 
 ##
-# NE PAS TOUCHER LA SUITE, UNIQUEMENT LANCER LA CELLULE AVEC LE BOUTON PLAY
+# Do not touch below
 ##
 
 
 import mediapy as m
 import urllib.request
-
-urllib.request.urlretrieve("https://github.com/treeform/pixie-python/raw/master/examples/data/Ubuntu-Regular_1.ttf",
-                           "Ubuntu-Regular_1.ttf")
 import pixie
 from math import pi
 from matplotlib import cm
 import io
+import os
+from datetime import datetime
+from tqdm import tqdm
+import numpy as np
+from math import sin, cos, sqrt, atan2, radians
+from datetime import date as date_creator
+from aerofiles.igc import Reader
+from scipy.interpolate import interp1d
+from PIL import Image
+import tempfile
+import requests
+
+urllib.request.urlretrieve("https://github.com/treeform/pixie-python/raw/master/examples/data/Ubuntu-Regular_1.ttf",
+                           "Ubuntu-Regular_1.ttf")
 
 A = 1920
 B = 1080
@@ -349,120 +360,79 @@ def add_flight_dist_to_img(img, time, font=None):
     return img
 
 
-def generate_test_image(output_filename='test_overlay.png'):
+def generate_dummy_igc(filename='dummy_flight.igc', num_points=60):
     """
-    Generate test image with time-series graphs using synthetic data.
+    Generate a dummy IGC file with realistic paragliding data.
+
+    Parameters:
+    -----------
+    filename : str
+        Output filename for the IGC file
+    num_points : int
+        Number of GPS points to generate
+
+    Returns:
+    --------
+    str : Path to the generated IGC file
     """
-    print(f"Generation de l'image de test avec graphiques: {output_filename}")
+    from datetime import datetime, timedelta
 
-    # Test values for current moment
-    test_vz = 2.3          # Variometre: +2.3 m/s (montee)
-    test_altitude = 1847   # Altitude: 1847m
-    test_speed = 42        # Vitesse: 42 km/h
-    test_time = '14h27'    # Heure: 14h27
-    test_flight_time = '01h23'  # Temps de vol: 1h23
-    test_distance = 45     # Distance: 45 km
+    print(f"Generating dummy IGC file: {filename} with {num_points} points")
 
-    # Generate synthetic time-series data for graphs
-    # Simulate flight data at 24fps / 16x speed
-    window_frames = int((300 / 16) * 24)  # frames for ±5 min (300 sec) accelerated
-    total_frames = window_frames * 2 + 1  # ±window around current
+    # Start position (somewhere in the Alps)
+    start_lat = 45.5  # degrees
+    start_lon = 6.5   # degrees
+    start_alt = 1500  # meters
+    start_time = datetime(2025, 5, 18, 14, 0, 0)  # 14h00
 
-    # Create synthetic data with realistic patterns
-    time_axis = np.linspace(-window_frames, window_frames, total_frames)
+    with open(filename, 'w') as f:
+        # Write IGC header
+        f.write("AXXX Example IGC file\n")
+        f.write("HFDTE180525\n")  # Date: 18/05/2025
+        f.write("HFPLTPILOTINCHARGE:Dummy Pilot\n")
+        f.write("HFGTYGLIDERTYPE:Test Wing\n")
+        f.write("HFGIDGLIDERID:TEST123\n")
+        f.write("HFDTM100GPSDATUM:WGS-1984\n")
 
-    # Altitude: gradual increase
-    test_alti_slice = 1800 + 50 * np.sin(time_axis / 10) + time_axis * 2
+        # Generate flight points
+        for i in range(num_points):
+            # Time progression (1 second per point)
+            current_time = start_time + timedelta(seconds=i)
 
-    # Vario: oscillating
-    test_vz_slice = 2 * np.sin(time_axis / 5) + np.random.normal(0, 0.3, total_frames)
+            # Simulate flight path with some variation
+            # Altitude: start at 1500m, climb to ~1650m, then descend
+            if i < 30:
+                altitude = start_alt + i * 5 + np.sin(i / 3) * 20
+            else:
+                altitude = start_alt + 150 - (i - 30) * 3 + np.sin(i / 3) * 20
 
-    # Speed: relatively stable with small variations
-    test_speed_slice = 40 + 5 * np.cos(time_axis / 8) + np.random.normal(0, 1, total_frames)
+            # Position: drift slightly (simulate wind)
+            lat = start_lat + (i * 0.0001) + np.sin(i / 5) * 0.0002
+            lon = start_lon + (i * 0.00015) + np.cos(i / 5) * 0.0002
 
-    # Graph configuration
-    graph_config = {
-        'speed_min': 30,
-        'speed_max': 55,
-        'vz_min': -3,
-        'vz_max': 3,
-        'alti_min': 1750,
-        'alti_max': 1900,
-        'time_window_frames': window_frames,
-        'fps': 24
-    }
+            # Convert to IGC format
+            # Format: BHHMMSS DDMMmmmN DDDMMmmmE A PPPPP GGGGG
+            lat_deg = int(lat)
+            lat_min = (lat - lat_deg) * 60
+            lat_min_int = int(lat_min)
+            lat_min_frac = int((lat_min - lat_min_int) * 1000)
 
-    # Create base overlay (black background only, no vario gauge or altitude)
-    font = pixie.read_font("Ubuntu-Regular_1.ttf")
-    cmpt = pixie.Image(A, B)
-    cmpt.fill(pixie.parse_color("#000000"))
+            lon_deg = int(lon)
+            lon_min = (lon - lon_deg) * 60
+            lon_min_int = int(lon_min)
+            lon_min_frac = int((lon_min - lon_min_int) * 1000)
 
-    # Old displays removed - now using graphs instead
-    # cmpt = create_full_compteur(test_vz, -3, 3, ref_xy=[0, 0], nb_trait=24)
-    # cmpt = add_vario_to_img(cmpt, test_vz, font)
-    # cmpt = add_alti_to_img(cmpt, test_altitude, font)
-    # cmpt = add_speed_to_img(cmpt, test_speed, font)
+            time_str = current_time.strftime("%H%M%S")
+            lat_str = f"{lat_deg:02d}{lat_min_int:02d}{lat_min_frac:03d}N"
+            lon_str = f"{lon_deg:03d}{lon_min_int:02d}{lon_min_frac:03d}E"
+            press_alt = int(altitude)
+            gps_alt = int(altitude + 5)  # GPS slightly different
 
-    cmpt = add_time_to_img(cmpt, test_time, font)
-    cmpt = add_flight_time_to_img(cmpt, test_flight_time, font)
-    cmpt = add_flight_dist_to_img(cmpt, str(test_distance), font)
+            # B record (fix)
+            f.write(f"B{time_str}{lat_str}{lon_str}A{press_alt:05d}{gps_alt:05d}\n")
 
-    # Add graphs - 20% smaller, positioned on the right
-    graph_width = 320  # 20% smaller (was 400)
-    graph_height = 144  # 20% smaller (was 180)
-    graph_y_position = 180  # Bottom area position (low y = bottom of screen)
-    marker_position = window_frames  # Middle of the slice
-
-    # Draw all three graphs shifted left to show +5min label
-    # Altitude graph (left of trio)
-    cmpt = draw_time_series_graph(
-        cmpt, test_alti_slice, marker_position,
-        center_x=-100, center_y=graph_y_position,  # Shifted left
-        width=graph_width, height=graph_height,
-        y_min=graph_config['alti_min'],
-        y_max=graph_config['alti_max'],
-        title="ALTITUDE", unit="m",
-        color_line="#4CAF50",  # Green
-        font=font,
-        show_current_value=True,
-        current_value=test_altitude,
-        time_window_sec=300
-    )
-
-    # Vario graph (center of trio)
-    cmpt = draw_time_series_graph(
-        cmpt, test_vz_slice, marker_position,
-        center_x=320, center_y=graph_y_position,  # Shifted left
-        width=graph_width, height=graph_height,
-        y_min=graph_config['vz_min'],
-        y_max=graph_config['vz_max'],
-        title="VARIO", unit="m/s",
-        color_line="#FF5722",  # Red/Orange
-        font=font,
-        show_current_value=True,
-        current_value=test_vz,
-        time_window_sec=300
-    )
-
-    # Speed graph (rightmost)
-    cmpt = draw_time_series_graph(
-        cmpt, test_speed_slice, marker_position,
-        center_x=740, center_y=graph_y_position,  # Shifted left for +5min
-        width=graph_width, height=graph_height,
-        y_min=graph_config['speed_min'],
-        y_max=graph_config['speed_max'],
-        title="SPEED", unit="km/h",
-        color_line="#2196F3",  # Blue
-        font=font,
-        show_current_value=True,
-        current_value=test_speed,
-        time_window_sec=300  # ±5 minutes (10 minutes total)
-    )
-
-    cmpt.write_file(output_filename)
-    print(f"[OK] Image de test avec graphiques generee: {output_filename}")
-    print(f"  Resolution: {A}x{B}")
-    print(f"  Graphiques: 3 x {graph_width}x{graph_height}px")
+    print(f"[OK] Dummy IGC generated: {filename}")
+    return filename
 
 
 def do_sin_compteur():
@@ -504,6 +474,8 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
     """
     Generate overlay images with optional time-series graphs.
 
+    Optimized for performance by reusing temp file and pre-parsing colors.
+
     Parameters:
     -----------
     all_speed, all_vz, all_alti : np.array
@@ -517,23 +489,17 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
     -------
     np.array : RGB image array for each frame
     """
-    # Create a temporary file path that works on all platforms
-    temp_file = os.path.join(tempfile.gettempdir(), 'tmp.png')
-
-    # Preload font once for performance
+    # Pre-compute reusable elements for performance
     font = pixie.read_font("Ubuntu-Regular_1.ttf")
+    black_color = pixie.parse_color("#000000")
+    temp_file = os.path.join(tempfile.gettempdir(), 'overlay_frame.png')
 
     for i in tqdm(range(all_speed.shape[0])):
-        # Create blank black background (removed vario gauge, altitude, speed displays)
+        # Create blank black background (reuse parsed color)
         cmpt = pixie.Image(A, B)
-        cmpt.fill(pixie.parse_color("#000000"))
+        cmpt.fill(black_color)
 
-        # Old displays removed - now using graphs instead
-        # cmpt = create_full_compteur(all_vz[i], -3, 3, ref_xy=[0, 0], nb_trait=24)
-        # cmpt = add_vario_to_img(cmpt, all_vz[i], font)
-        # cmpt = add_alti_to_img(cmpt, str(int(all_alti[i])), font)
-        # cmpt = add_speed_to_img(cmpt, str(int(all_speed[i])), font)
-
+        # Add text overlays
         cmpt = add_time_to_img(cmpt, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font)
         cmpt = add_flight_time_to_img(cmpt, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font)
         cmpt = add_flight_dist_to_img(cmpt, str(int(
@@ -547,24 +513,11 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
                 graph_config, font
             )
 
+        # Write to disk and read back (reuse same temp file path)
         cmpt.write_file(temp_file)
         img = Image.open(temp_file)
         yield np.array(img)[:, :, :3]
 
-
-import os
-from datetime import datetime
-from tqdm import tqdm
-import numpy as np
-from math import sin, cos, sqrt, atan2, radians
-from datetime import date as date_creator
-from aerofiles.igc import Reader
-from scipy.interpolate import interp1d
-from PIL import Image
-import tempfile
-
-import numpy
-import requests
 
 
 def smooth(x, window_len=11, window='hanning'):
@@ -576,12 +529,12 @@ def smooth(x, window_len=11, window='hanning'):
         return x
     if not window in ['flat', 'hanning', 'hamming', 'bartlett', 'blackman']:
         raise ValueError("Window is on of 'flat', 'hanning', 'hamming', 'bartlett', 'blackman'")
-    s = numpy.r_[2 * x[0] - x[window_len - 1::-1], x, 2 * x[-1] - x[-1:-window_len:-1]]
+    s = np.r_[2 * x[0] - x[window_len - 1::-1], x, 2 * x[-1] - x[-1:-window_len:-1]]
     if window == 'flat':  # moving average
-        w = numpy.ones(window_len, 'd')
+        w = np.ones(window_len, 'd')
     else:
-        w = eval('numpy.' + window + '(window_len)')
-    y = numpy.convolve(w / w.sum(), s, mode='same')
+        w = eval('np.' + window + '(window_len)')
+    y = np.convolve(w / w.sum(), s, mode='same')
     return y[window_len:-window_len + 1]
 
 
@@ -623,6 +576,7 @@ def get_all_time_end():
             print(file_name, d)
 
 
+# TODO: Document this
 def remove_zero_from_alti(alti):
     if alti[0] < 10:
         alti[0] = (alti[1] + alti[2]) / 2
@@ -637,12 +591,16 @@ def remove_zero_from_alti(alti):
 def read_igc(file_url=None, file_path=None):
     if file_url is not None:
         igc = requests.get(file_url)
+        print("Getting ", file_url)
         parsed_igc_file = Reader().read(io.StringIO(igc.text))
     elif file_path is not None:
+        print("Reading ", file_path)
         with open(file_path, 'r') as igc_file:
             parsed_igc_file = Reader().read(igc_file)
 
-    print('igc_file created')
+    assert(len(parsed_igc_file['fix_records'][1]) > 0)
+
+    print('igc_file read')
     previous_lat = 0
     previous_lon = 0
 
@@ -654,6 +612,7 @@ def read_igc(file_url=None, file_path=None):
     for i, record in tqdm(enumerate(parsed_igc_file['fix_records'][1])):
         record['time'] = record['time'].replace(hour=record['time'].hour + 1)
         if previous_lon == 0:
+            # Init previous value with first record
             previous_lat = record['lat']
             previous_lon = record['lon']
             previous_datetime = record['time']
@@ -665,7 +624,7 @@ def read_igc(file_url=None, file_path=None):
             dz = previous_alt_baro - record['pressure_alt']
             dz = previous_alt_gps - record['gps_alt']
             dt = get_date_time_dif(record['time'], previous_datetime)
-            if dt > 1: print('dtttttt>1 ', dt)
+            if dt > 1: print('Delta T between points > 1 at time %s: : %s' % (record['time'], dt))
 
             all_speed[i] = min(100, sqrt(dxy ** 2 + 0 * dz ** 2) / dt * 3.6)
             all_vz[i] = dz / dt
@@ -678,11 +637,7 @@ def read_igc(file_url=None, file_path=None):
             previous_alt_gps = record['gps_alt']
             previous_alt_baro = record['pressure_alt']
 
-            # if previous_datetime.hour>10 :
-            #     all_speed = all_speed[:i]
-            #     all_vz = all_vz[:i]
-            #     all_alti = all_alti[:i]
-            #     break
+
     return all_speed, all_vz, remove_zero_from_alti(all_alti), all_time
 
 
@@ -1174,7 +1129,7 @@ def add_time_series_graphs(img, current_index,
     # Graph dimensions and position - 20% smaller, on the right
     graph_width = 320  # 20% smaller (was 400)
     graph_height = 144  # 20% smaller (was 180)
-    graph_y = 180  # Bottom area position
+    graph_y = 120  # Bottom area position
 
     # Get time window from config (default to 300 seconds = ±5 min)
     time_window_sec = graph_config.get('time_window_sec', 300)
@@ -1231,67 +1186,95 @@ def add_time_series_graphs(img, current_index,
 
 if __name__ == '__main__':
 
+    # Create output folder if it doesn't exist
+    output_folder = 'output'
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Initialize IGC
     if TEST_MODE:
-        # MODE TEST: Générer une seule image pour ajuster les positions
         print("=" * 60)
-        print("MODE TEST ACTIVÉ")
+        print("Test Mode activated")
         print("=" * 60)
-        generate_test_image('test_overlay.png')
+        dummy_igc = generate_dummy_igc('dummy_test_flight.igc', num_points=60)
+        igc_source = dummy_igc
+        output_name = 'test_overlay.png'
+    else:
+        print("=" * 60)
+        print("Video mode activated")
+        print("=" * 60)
+        igc_source = file_path
+        # Extract base name from input file and use for output
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        output_name = os.path.join(output_folder, f'{base_name}_overlay.mp4')
+
+    # Process data (same for both modes)
+    print('def ok')
+    all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url if not TEST_MODE else None,
+                                                       file_path=igc_source)
+    print('\n process_igc ok')
+
+    all_speed_smooth, all_vz_smooth, all_alti_smooth = smooth_igc_output([all_speed, all_vz, all_alti])
+    print('igc smoothed')
+
+    all_vz2 = np.zeros(all_alti_smooth.shape[0])
+    for i, alti in enumerate(list(all_alti_smooth)):
+        if i >= all_alti_smooth.shape[0] - 1:
+            pass
+        else:
+            all_vz2[i] = all_alti_smooth[i + 1] - all_alti_smooth[i]
+
+    print('smoothed vario ok')
+
+    speed_vid = all_speed_smooth
+    vz_vid = all_vz2
+    alti_vid = all_alti_smooth
+    time_vid = convert_time_to_sec(all_time)
+    print('time to sec ok')
+
+    time_vid_reshaped = reshape_array(time_vid, time_vid)
+    time_vid_full_reshaped = reshape_array(all_time, all_time)
+    speed_vid_reshaped = reshape_array(speed_vid, time_vid)
+    vz_vid_reshaped = reshape_array(vz_vid, time_vid)
+    alti_vid_reshaped = reshape_array(alti_vid, time_vid)
+    print('reshaped ok')
+
+    # Compute graph parameters
+    graph_config = compute_graph_parameters(
+        speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
+        speed_acc=speed_acc, fps=24
+    )
+    print('graph config computed')
+    print(f"  Time window: +/-{graph_config['time_window_sec']/speed_acc:.2f} real seconds = {graph_config['time_window_frames']} frames")
+    print(f"  Speed range: {graph_config['speed_min']:.1f} - {graph_config['speed_max']:.1f} km/h")
+    print(f"  Vario range: {graph_config['vz_min']:.1f} - {graph_config['vz_max']:.1f} m/s")
+    print(f"  Altitude range: {graph_config['alti_min']:.0f} - {graph_config['alti_max']:.0f} m")
+
+    # Generate frames
+    img_gen = gen_img_from_smoothed_list(
+        speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
+        time_vid_reshaped, time_vid_full_reshaped,
+        graph_config=graph_config
+    )
+
+    # Video processing
+    if TEST_MODE:
+        # Save 30th frame only
+        print(f"\nSaving frame 30 as {output_name}...")
+        target_frame = 29  # 0-indexed
+        for i, frame in enumerate(img_gen):
+            if i == target_frame:
+                img_pil = Image.fromarray(frame, 'RGB')
+                img_pil.save(output_name)
+                print(f"[OK] Frame {target_frame + 1} saved as {output_name}")
+                break
+            elif i > target_frame:
+                break
         print("\nPour générer la vidéo complète, mettez TEST_MODE = False")
     else:
-        # MODE NORMAL: Générer la vidéo complète
-        print("=" * 60)
-        print("MODE VIDÉO - Génération de l'overlay complet")
-        print("=" * 60)
-
-        print('def ok')
-        all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url, file_path=file_path)
-        print('\n process_igc ok')
-
-        all_speed_smooth, all_vz_smooth, all_alti_smooth = smooth_igc_output([all_speed, all_vz, all_alti])
-        all_vz2 = np.zeros(all_alti_smooth.shape[0])
-
-        print('igc smothed')
-        for i, alti in enumerate(list(all_alti_smooth)):
-            if i >= all_alti_smooth.shape[0] - 1:
-                pass
-            else:
-                all_vz2[i] = all_alti_smooth[i + 1] - all_alti_smooth[i]
-
-        print('smoothed vario ok')
-        speed_vid = all_speed_smooth
-        vz_vid = all_vz2
-        alti_vid = all_alti_smooth
-        time_vid = convert_time_to_sec(all_time)
-        print('time to sec ok')
-
-        time_vid_reshaped = reshape_array(time_vid, time_vid)
-        time_vid_full_reshaped = reshape_array(all_time, all_time)
-        speed_vid_reshaped = reshape_array(speed_vid, time_vid)
-        vz_vid_reshaped = reshape_array(vz_vid, time_vid)
-        alti_vid_reshaped = reshape_array(alti_vid, time_vid)
-        print('reshaped ok')
-
-        # Compute graph parameters
-        graph_config = compute_graph_parameters(
-            speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
-            speed_acc=speed_acc, fps=24
-        )
-        print('graph config computed')
-        print(f"  Time window: +/-{10/speed_acc:.2f} real seconds = {graph_config['time_window_frames']} frames")
-        print(f"  Speed range: {graph_config['speed_min']:.1f} - {graph_config['speed_max']:.1f} km/h")
-        print(f"  Vario range: {graph_config['vz_min']:.1f} - {graph_config['vz_max']:.1f} m/s")
-        print(f"  Altitude range: {graph_config['alti_min']:.0f} - {graph_config['alti_max']:.0f} m")
-
-        # Generate video with graphs
-        # ffmpeg -framerate 24 -i C:\tmp_vid\vid1\%01d.png C:\tmp_vid\1.mp4
-        img_gen = gen_img_from_smoothed_list(
-            speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
-            time_vid_reshaped, time_vid_full_reshaped,
-            graph_config=graph_config
-        )
-        m.write_video('overlay.mp4', img_gen, fps=24, qp=qualite_compression)
-        print("\n[OK] Video generee: overlay.mp4")
+        # Save full video
+        print(f"\nGenerating video: {output_name}")
+        m.write_video(output_name, img_gen, fps=24, qp=qualite_compression)
+        print(f"\nVideo ok: {output_name}")
 
 
 

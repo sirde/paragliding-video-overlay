@@ -38,7 +38,7 @@ qualite_compression = 15  # Video quality (10-20, higher = better quality)
 ## Usage
 
 ### Test Mode
-Generates a test image (`test_overlay.png`) to verify layout:
+Generates a test image to verify layout:
 
 ```python
 TEST_MODE = True
@@ -56,6 +56,7 @@ Generates the complete video with overlay:
 
 ```python
 TEST_MODE = False
+file_path = r"C:\path\to\your_flight.igc"
 ```
 
 Then run:
@@ -63,7 +64,22 @@ Then run:
 python igc_to_overlay.py
 ```
 
-**Output**: `overlay.mp4` - Full video at 24 fps
+**Output**: `output/your_flight_overlay.mp4` - Full video at 24 fps
+
+The output video is automatically named based on the input IGC filename and saved in the `output/` folder.
+
+## Output Structure
+
+```
+Overlay/
+├── igc_to_overlay.py
+├── test_overlay.png          # Test mode output
+├── output/                    # Video mode outputs
+│   ├── flight1_overlay.mp4
+│   ├── flight2_overlay.mp4
+│   └── ...
+└── ...
+```
 
 ## Features
 

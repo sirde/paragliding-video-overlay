@@ -1,0 +1,32 @@
+# Output videos
+output/
+
+# Test outputs
+test_overlay.png
+dummy_test_flight.igc
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Fonts (downloaded at runtime)
+Ubuntu-Regular_1.ttf
+
+# OS
+.DS_Store
+Thumbs.db
