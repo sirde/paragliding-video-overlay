@@ -35,19 +35,22 @@ from datetime import date as date_creator
 from aerofiles.igc import Reader
 from scipy.interpolate import interp1d
 from PIL import Image
-import tempfile
 import requests
 import time
 from contextlib import contextmanager
+from multiprocessing import Pool, cpu_count
+from functools import partial
 
-urllib.request.urlretrieve("https://github.com/treeform/pixie-python/raw/master/examples/data/Ubuntu-Regular_1.ttf",
-                           "Ubuntu-Regular_1.ttf")
 
 A = 1920
 B = 1080
 
 # Performance tracking
 performance_times = {}
+
+# Configuration for parallel processing
+USE_PARALLEL = True  # Set to False to disable parallel processing
+NUM_WORKERS = cpu_count()  # Use all CPU cores (set to a specific number if needed)
 
 @contextmanager
 def timer(name):
@@ -62,6 +65,11 @@ def print_performance_summary():
     """Print a summary of all performance measurements."""
     print("\n" + "=" * 60)
     print("PERFORMANCE SUMMARY")
+    print("=" * 60)
+    if USE_PARALLEL:
+        print(f"  Parallel processing: ENABLED ({NUM_WORKERS} workers)")
+    else:
+        print(f"  Parallel processing: DISABLED")
     print("=" * 60)
     total = sum(performance_times.values())
     for name, elapsed in performance_times.items():
@@ -685,6 +693,53 @@ def timesec_to_string(tsec, h_ete=0):
     return str60(int(h) + h_ete) + 'h' + str60(int(m))
 
 
+def generate_single_frame(i, all_speed, all_vz, all_alti, all_time, all_time_full, graph_config, font_cache, color_cache):
+    """
+    Worker function to generate a single frame (for parallel processing).
+
+    Parameters:
+    -----------
+    i : int
+        Frame index
+    all_speed, all_vz, all_alti : np.array
+        Flight metric arrays
+    all_time, all_time_full : np.array
+        Time arrays
+    graph_config : dict or None
+        Graph configuration
+    font_cache : dict
+        Pre-loaded fonts
+    color_cache : dict
+        Pre-defined colors
+
+    Returns:
+    --------
+    np.array : RGB image array for this frame
+    """
+    from PIL import ImageDraw
+
+    # Create blank black background using Pillow
+    img = Image.new('RGB', (A, B), color='black')
+    draw = ImageDraw.Draw(img, 'RGBA')
+
+    # Add text overlays
+    add_time_to_img_pil(img, draw, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font_cache, color_cache)
+    add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font_cache, color_cache)
+    add_flight_dist_to_img_pil(img, draw, str(int(
+        TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font_cache, color_cache)
+
+    # Add time-series graphs if configured
+    if graph_config is not None:
+        add_time_series_graphs_pil(
+            img, draw, i,
+            all_speed, all_vz, all_alti,
+            graph_config, font_cache, color_cache
+        )
+
+    # Convert to numpy array
+    return np.array(img)
+
+
 def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_full,
                                  graph_config=None):
     """
@@ -754,51 +809,86 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
         'very_light_gray': (204, 204, 204),
     }
 
-    # Track internal timings
-    time_image_creation = 0
-    time_text_overlay = 0
-    time_graph_overlay = 0
-    time_file_io = 0
     frame_count = all_speed.shape[0]
 
-    for i in tqdm(range(frame_count)):
-        # Create blank black background using Pillow
-        t0 = time.time()
-        img = Image.new('RGB', (A, B), color='black')
-        draw = ImageDraw.Draw(img, 'RGBA')  # Enable alpha for semi-transparent colors
-        time_image_creation += time.time() - t0
+    if USE_PARALLEL and frame_count > NUM_WORKERS:
+        # Parallel processing mode
+        print(f"Using parallel processing with {NUM_WORKERS} workers...")
 
-        # Add text overlays
-        t0 = time.time()
-        add_time_to_img_pil(img, draw, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font_cache, color_cache)
-        add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font_cache, color_cache)
-        add_flight_dist_to_img_pil(img, draw, str(int(
-            TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font_cache, color_cache)
-        time_text_overlay += time.time() - t0
+        # Create partial function with fixed parameters
+        worker_func = partial(
+            generate_single_frame,
+            all_speed=all_speed,
+            all_vz=all_vz,
+            all_alti=all_alti,
+            all_time=all_time,
+            all_time_full=all_time_full,
+            graph_config=graph_config,
+            font_cache=font_cache,
+            color_cache=color_cache
+        )
 
-        # Add time-series graphs if configured
-        if graph_config is not None:
+        # Generate frames in parallel using multiprocessing Pool
+        with Pool(processes=NUM_WORKERS) as pool:
+            # Use imap for better memory efficiency with progress bar
+            frame_indices = range(frame_count)
+            for frame_array in tqdm(pool.imap(worker_func, frame_indices), total=frame_count):
+                yield frame_array
+
+        # Note: Detailed timing not available in parallel mode
+        performance_times['  - Frame generation (parallel)'] = 0  # Timing captured in step 7
+
+    else:
+        # Sequential processing mode (for small videos or when parallel is disabled)
+        if not USE_PARALLEL:
+            print("Parallel processing disabled, using sequential mode...")
+        else:
+            print(f"Too few frames ({frame_count}) for parallel processing, using sequential mode...")
+
+        # Track internal timings
+        time_image_creation = 0
+        time_text_overlay = 0
+        time_graph_overlay = 0
+        time_file_io = 0
+
+        for i in tqdm(range(frame_count)):
+            # Create blank black background using Pillow
             t0 = time.time()
-            add_time_series_graphs_pil(
-                img, draw, i,
-                all_speed, all_vz, all_alti,
-                graph_config, font_cache, color_cache
-            )
-            time_graph_overlay += time.time() - t0
+            img = Image.new('RGB', (A, B), color='black')
+            draw = ImageDraw.Draw(img, 'RGBA')  # Enable alpha for semi-transparent colors
+            time_image_creation += time.time() - t0
 
-        # Direct numpy conversion - NO FILE I/O!
-        t0 = time.time()
-        frame_array = np.array(img)
-        time_file_io += time.time() - t0
+            # Add text overlays
+            t0 = time.time()
+            add_time_to_img_pil(img, draw, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font_cache, color_cache)
+            add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font_cache, color_cache)
+            add_flight_dist_to_img_pil(img, draw, str(int(
+                TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font_cache, color_cache)
+            time_text_overlay += time.time() - t0
 
-        yield frame_array
+            # Add time-series graphs if configured
+            if graph_config is not None:
+                t0 = time.time()
+                add_time_series_graphs_pil(
+                    img, draw, i,
+                    all_speed, all_vz, all_alti,
+                    graph_config, font_cache, color_cache
+                )
+                time_graph_overlay += time.time() - t0
 
-    # Store detailed frame generation metrics
-    if frame_count > 0:
-        performance_times['  - Image creation'] = time_image_creation
-        performance_times['  - Text overlay'] = time_text_overlay
-        performance_times['  - Graph overlay'] = time_graph_overlay
-        performance_times['  - File I/O (write+read)'] = time_file_io
+            # Direct numpy conversion - NO FILE I/O!
+            t0 = time.time()
+            frame_array = np.array(img)
+            time_file_io += time.time() - t0
+
+            yield frame_array
+
+        # Store detailed frame generation metrics (sequential mode only)
+        if frame_count > 0:
+            performance_times['  - Image creation'] = time_image_creation
+            performance_times['  - Text overlay'] = time_text_overlay
+            performance_times['  - Graph overlay'] = time_graph_overlay
+            performance_times['  - File I/O (write+read)'] = time_file_io
 
 
 
@@ -1497,6 +1587,9 @@ if __name__ == '__main__':
 
     # Process data (same for both modes)
     print('def ok')
+
+    urllib.request.urlretrieve("https://github.com/treeform/pixie-python/raw/master/examples/data/Ubuntu-Regular_1.ttf",
+                               "Ubuntu-Regular_1.ttf")
 
     with timer("1. Read IGC file"):
         all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url if not TEST_MODE else None,
