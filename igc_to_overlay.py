@@ -12,7 +12,7 @@ speed_acc = 16  # Acceleration factor for video, typically x16
 file_url =  None #"https://www.syride.com/scripts/downloadIGC.php?idSession=2121335&key=0356809495924"
 # file_path = None
 # file_path = r"C:\Users\sirde\Dropbox\Parapente\Vercofly\Tracks 2025\CEDRIC-GERBER (2).igc"
-file_path = r"C:\Users\sirde\Dropbox\Parapente\Overlay\2025-05-18-XCT-CGE-12.igc"
+file_path = r"2025-09-27-XCT-CGE-13.igc"
 qualite_compression = 15  # valeur à augmenter pour avoir une meilleure qualité, 10 est bien suffisant
 
 ##
@@ -37,12 +37,39 @@ from scipy.interpolate import interp1d
 from PIL import Image
 import tempfile
 import requests
+import time
+from contextlib import contextmanager
 
 urllib.request.urlretrieve("https://github.com/treeform/pixie-python/raw/master/examples/data/Ubuntu-Regular_1.ttf",
                            "Ubuntu-Regular_1.ttf")
 
 A = 1920
 B = 1080
+
+# Performance tracking
+performance_times = {}
+
+@contextmanager
+def timer(name):
+    """Context manager to measure execution time of code blocks."""
+    start = time.time()
+    yield
+    elapsed = time.time() - start
+    performance_times[name] = elapsed
+    print(f"[PERF] {name}: {elapsed:.2f}s")
+
+def print_performance_summary():
+    """Print a summary of all performance measurements."""
+    print("\n" + "=" * 60)
+    print("PERFORMANCE SUMMARY")
+    print("=" * 60)
+    total = sum(performance_times.values())
+    for name, elapsed in performance_times.items():
+        percentage = (elapsed / total * 100) if total > 0 else 0
+        print(f"  {name:.<50} {elapsed:>6.2f}s ({percentage:>5.1f}%)")
+    print("-" * 60)
+    print(f"  {'TOTAL':.<50} {total:>6.2f}s")
+    print("=" * 60)
 
 
 def abtoxy(a, b=None):
@@ -360,6 +387,195 @@ def add_flight_dist_to_img(img, time, font=None):
     return img
 
 
+##
+# PIL/Pillow versions of text overlay functions
+##
+
+def add_time_to_img_pil(img, draw, time_str, font_cache, color_cache):
+    """Add current time to image using Pillow"""
+    # Time text
+    x_var, y_var = -750 + 85, 145 + 40 + 8
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), time_str, fill=color_cache['white'], font=font_cache['medium'])
+
+    # "HOUR" label
+    x_var, y_var = -800 + 6, 145 + 40
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), 'HOUR', fill=color_cache['gray_lighter'], font=font_cache['small'])
+
+
+def add_flight_time_to_img_pil(img, draw, time_str, font_cache, color_cache):
+    """Add flight time to image using Pillow"""
+    # Flight time text
+    x_var, y_var = -750 + 85, 145 + 40 + 8 - 62
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), time_str, fill=color_cache['white'], font=font_cache['medium'])
+
+    # "FLIGHT TIME" label
+    x_var, y_var = -835 - 77, 145 + 40 - 62
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), 'FLIGHT TIME', fill=color_cache['gray_lighter'], font=font_cache['small'])
+
+
+def add_flight_dist_to_img_pil(img, draw, dist_str, font_cache, color_cache):
+    """Add flight distance to image using Pillow"""
+    # Distance text
+    x_var, y_var = -750 + 85, 145 + 40 + 8 - 62 - 62
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), dist_str, fill=color_cache['white'], font=font_cache['medium'])
+
+    # "FLIGHT DIST" label
+    x_var, y_var = -835 - 70, 145 + 40 - 62 - 62
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), 'FLIGHT DIST', fill=color_cache['gray_lighter'], font=font_cache['small'])
+
+    # "Km" unit
+    x_var, y_var = -835 + 70 + 193, 145 + 40 - 62 - 62
+    a, b = xytoab(x_var, y_var)
+    draw.text((a, b), 'Km', fill=color_cache['gray_lighter'], font=font_cache['small'])
+
+
+def add_time_series_graphs_pil(img, draw, current_index,
+                                all_speed, all_vz, all_alti,
+                                graph_config, font_cache, color_cache):
+    """Add time-series graphs using Pillow/PIL ImageDraw"""
+    window_frames = graph_config['time_window_frames']
+    time_window_sec = graph_config.get('time_window_sec', 300)
+
+    # Extract time windows for each metric
+    speed_slice, speed_marker = extract_time_window(all_speed, current_index, window_frames)
+    vz_slice, vz_marker = extract_time_window(all_vz, current_index, window_frames)
+    alti_slice, alti_marker = extract_time_window(all_alti, current_index, window_frames)
+
+    # Graph dimensions and positions
+    graph_width = 320
+    graph_height = 144
+    graph_y = 120
+
+    # Draw altitude graph (left)
+    draw_time_series_graph_pil(
+        img, draw, alti_slice, alti_marker,
+        center_x=-100, center_y=graph_y,
+        width=graph_width, height=graph_height,
+        y_min=graph_config['alti_min'],
+        y_max=graph_config['alti_max'],
+        title="ALTITUDE", unit="m",
+        color_line=color_cache['green'],
+        font_cache=font_cache,
+        color_cache=color_cache,
+        current_value=alti_slice[alti_marker] if alti_marker < len(alti_slice) else None,
+        time_window_sec=time_window_sec
+    )
+
+    # Draw vario graph (center)
+    draw_time_series_graph_pil(
+        img, draw, vz_slice, vz_marker,
+        center_x=320, center_y=graph_y,
+        width=graph_width, height=graph_height,
+        y_min=graph_config['vz_min'],
+        y_max=graph_config['vz_max'],
+        title="VARIO", unit="m/s",
+        color_line=color_cache['red_orange'],
+        font_cache=font_cache,
+        color_cache=color_cache,
+        current_value=vz_slice[vz_marker] if vz_marker < len(vz_slice) else None,
+        time_window_sec=time_window_sec
+    )
+
+    # Draw speed graph (right)
+    draw_time_series_graph_pil(
+        img, draw, speed_slice, speed_marker,
+        center_x=740, center_y=graph_y,
+        width=graph_width, height=graph_height,
+        y_min=graph_config['speed_min'],
+        y_max=graph_config['speed_max'],
+        title="SPEED", unit="km/h",
+        color_line=color_cache['blue'],
+        font_cache=font_cache,
+        color_cache=color_cache,
+        current_value=speed_slice[speed_marker] if speed_marker < len(speed_slice) else None,
+        time_window_sec=time_window_sec
+    )
+
+
+def draw_time_series_graph_pil(img, draw, data_slice, marker_position,
+                                center_x, center_y, width, height,
+                                y_min, y_max, title, unit, color_line,
+                                font_cache, color_cache, current_value=None,
+                                time_window_sec=300):
+    """Draw a single time-series graph using PIL/Pillow"""
+    # Calculate graph bounds
+    left_x = center_x - width // 2
+    right_x = center_x + width // 2
+    bottom_y = center_y - height // 2
+    top_y = center_y + height // 2
+
+    # Convert to ab coordinates
+    left_a, bottom_b = xytoab(left_x, bottom_y)
+    right_a, top_b = xytoab(right_x, top_y)
+
+    # Draw background
+    draw.rectangle([left_a, top_b, right_a, bottom_b], fill=color_cache['bg_semi'])
+
+    # Draw border
+    draw.rectangle([left_a, top_b, right_a, bottom_b], outline=color_cache['gray_border'], width=2)
+
+    # Draw line graph
+    if len(data_slice) > 1:
+        points = []
+        for i in range(len(data_slice)):
+            x_norm = i / (len(data_slice) - 1)
+            x_screen = left_x + (right_x - left_x) * x_norm
+            y_data = data_slice[i]
+            y_norm = (y_data - y_min) / (y_max - y_min) if y_max != y_min else 0.5
+            y_norm = max(0, min(1, y_norm))  # Clamp to 0-1
+            y_screen = bottom_y + (top_y - bottom_y) * y_norm
+            a, b = xytoab(x_screen, y_screen)
+            points.append((a, b))
+
+        if len(points) > 1:
+            draw.line(points, fill=color_line, width=3)
+
+    # Draw current marker (vertical line)
+    if len(data_slice) > 0:
+        x_norm = marker_position / (len(data_slice) - 1) if len(data_slice) > 1 else 0.5
+        x_screen = left_x + (right_x - left_x) * x_norm
+        a_marker, b_bottom = xytoab(x_screen, bottom_y)
+        _, b_top = xytoab(x_screen, top_y)
+        draw.line([(a_marker, b_bottom), (a_marker, b_top)], fill=color_cache['white_semi'], width=2)
+
+        # Draw dot at current value
+        if marker_position < len(data_slice):
+            y_data = data_slice[marker_position]
+            y_norm = (y_data - y_min) / (y_max - y_min) if y_max != y_min else 0.5
+            y_norm = max(0, min(1, y_norm))
+            y_screen = bottom_y + (top_y - bottom_y) * y_norm
+            a_dot, b_dot = xytoab(x_screen, y_screen)
+            draw.ellipse([a_dot-4, b_dot-4, a_dot+4, b_dot+4], fill=color_cache['yellow'])
+
+    # Draw title
+    title_x = center_x - width // 2 + 100
+    title_y = center_y + height // 2 + 30
+    a_title, b_title = xytoab(title_x - 100, title_y)
+    draw.text((a_title, b_title), title, fill=color_cache['very_light_gray'], font=font_cache['graph_title'])
+
+    # Draw current value
+    if current_value is not None:
+        if title == "ALTITUDE":
+            value_text = f"{int(current_value)}{unit}"
+            value_x = center_x - 10
+        elif title == "SPEED":
+            value_text = f"{current_value:.1f}{unit}"
+            value_x = center_x - 40
+        else:  # VARIO
+            value_text = f"{current_value:.1f}{unit}"
+            value_x = center_x - 40
+
+        value_y = top_y + 25
+        a_val, b_val = xytoab(value_x, value_y)
+        draw.text((a_val, b_val), value_text, fill=color_cache['white'], font=font_cache['graph_value'])
+
+
 def generate_dummy_igc(filename='dummy_flight.igc', num_points=60):
     """
     Generate a dummy IGC file with realistic paragliding data.
@@ -474,7 +690,7 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
     """
     Generate overlay images with optional time-series graphs.
 
-    Optimized for performance by reusing temp file and pre-parsing colors.
+    Now uses Pillow for direct numpy conversion (no disk I/O!).
 
     Parameters:
     -----------
@@ -489,34 +705,100 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
     -------
     np.array : RGB image array for each frame
     """
-    # Pre-compute reusable elements for performance
-    font = pixie.read_font("Ubuntu-Regular_1.ttf")
-    black_color = pixie.parse_color("#000000")
-    temp_file = os.path.join(tempfile.gettempdir(), 'overlay_frame.png')
+    from PIL import ImageFont, ImageDraw
 
-    for i in tqdm(range(all_speed.shape[0])):
-        # Create blank black background (reuse parsed color)
-        cmpt = pixie.Image(A, B)
-        cmpt.fill(black_color)
+    # Pre-load fonts for performance
+    try:
+        font_large = ImageFont.truetype("Ubuntu-Regular_1.ttf", 80)
+        font_medium = ImageFont.truetype("Ubuntu-Regular_1.ttf", 55)
+        font_small = ImageFont.truetype("Ubuntu-Regular_1.ttf", 40)
+        font_graph_title = ImageFont.truetype("Ubuntu-Regular_1.ttf", 30)
+        font_graph_label = ImageFont.truetype("Ubuntu-Regular_1.ttf", 16)
+        font_graph_value = ImageFont.truetype("Ubuntu-Regular_1.ttf", 24)
+        font_graph_tick = ImageFont.truetype("Ubuntu-Regular_1.ttf", 14)
+    except:
+        # Fallback to default font if Ubuntu not found
+        font_large = ImageFont.load_default()
+        font_medium = ImageFont.load_default()
+        font_small = ImageFont.load_default()
+        font_graph_title = ImageFont.load_default()
+        font_graph_label = ImageFont.load_default()
+        font_graph_value = ImageFont.load_default()
+        font_graph_tick = ImageFont.load_default()
+
+    font_cache = {
+        'large': font_large,
+        'medium': font_medium,
+        'small': font_small,
+        'graph_title': font_graph_title,
+        'graph_label': font_graph_label,
+        'graph_value': font_graph_value,
+        'graph_tick': font_graph_tick
+    }
+
+    # Cache colors as RGB tuples for Pillow
+    color_cache = {
+        'white': (255, 255, 255),
+        'black': (0, 0, 0),
+        'gray_dark': (51, 51, 51, 204),  # with alpha
+        'gray_medium': (77, 77, 77, 153),
+        'gray_light': (136, 136, 136),
+        'gray_lighter': (170, 170, 170),
+        'gray_border': (77, 77, 77),
+        'bg_semi': (26, 26, 26, 128),  # with alpha
+        'white_semi': (255, 255, 255, 204),
+        'yellow': (255, 255, 0),
+        'green': (76, 175, 80),
+        'red_orange': (255, 87, 34),
+        'blue': (33, 150, 243),
+        'very_light_gray': (204, 204, 204),
+    }
+
+    # Track internal timings
+    time_image_creation = 0
+    time_text_overlay = 0
+    time_graph_overlay = 0
+    time_file_io = 0
+    frame_count = all_speed.shape[0]
+
+    for i in tqdm(range(frame_count)):
+        # Create blank black background using Pillow
+        t0 = time.time()
+        img = Image.new('RGB', (A, B), color='black')
+        draw = ImageDraw.Draw(img, 'RGBA')  # Enable alpha for semi-transparent colors
+        time_image_creation += time.time() - t0
 
         # Add text overlays
-        cmpt = add_time_to_img(cmpt, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font)
-        cmpt = add_flight_time_to_img(cmpt, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font)
-        cmpt = add_flight_dist_to_img(cmpt, str(int(
-            TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font)
+        t0 = time.time()
+        add_time_to_img_pil(img, draw, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font_cache, color_cache)
+        add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font_cache, color_cache)
+        add_flight_dist_to_img_pil(img, draw, str(int(
+            TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font_cache, color_cache)
+        time_text_overlay += time.time() - t0
 
         # Add time-series graphs if configured
         if graph_config is not None:
-            cmpt = add_time_series_graphs(
-                cmpt, i,
+            t0 = time.time()
+            add_time_series_graphs_pil(
+                img, draw, i,
                 all_speed, all_vz, all_alti,
-                graph_config, font
+                graph_config, font_cache, color_cache
             )
+            time_graph_overlay += time.time() - t0
 
-        # Write to disk and read back (reuse same temp file path)
-        cmpt.write_file(temp_file)
-        img = Image.open(temp_file)
-        yield np.array(img)[:, :, :3]
+        # Direct numpy conversion - NO FILE I/O!
+        t0 = time.time()
+        frame_array = np.array(img)
+        time_file_io += time.time() - t0
+
+        yield frame_array
+
+    # Store detailed frame generation metrics
+    if frame_count > 0:
+        performance_times['  - Image creation'] = time_image_creation
+        performance_times['  - Text overlay'] = time_text_overlay
+        performance_times['  - Graph overlay'] = time_graph_overlay
+        performance_times['  - File I/O (write+read)'] = time_file_io
 
 
 
@@ -690,11 +972,11 @@ def convert_time_to_sec(all_time):
 # GRAPH DRAWING FUNCTIONS
 ##
 
-def draw_grid_lines(img, left_x, right_x, bottom_y, top_y, y_min, y_max, num_lines=5):
+def draw_grid_lines(img, left_x, right_x, bottom_y, top_y, y_min, y_max, num_lines=5, color_cache=None):
     """Draw horizontal grid lines across the graph."""
     ctx = img.new_context()
     paint = pixie.Paint(pixie.SOLID_PAINT)
-    paint.color = pixie.Color(0.2, 0.2, 0.2, 0.8)  # Dark gray
+    paint.color = color_cache['gray_dark'] if color_cache else pixie.Color(0.2, 0.2, 0.2, 0.8)
     ctx.stroke_style = paint
     ctx.line_width = 1
 
@@ -714,14 +996,15 @@ def draw_grid_lines(img, left_x, right_x, bottom_y, top_y, y_min, y_max, num_lin
 
 
 def draw_line_graph(img, data_slice, left_x, right_x, bottom_y, top_y,
-                    y_min, y_max, color_line):
+                    y_min, y_max, color_line, color_cache=None):
     """Draw the line connecting data points."""
     if len(data_slice) < 2:
         return
 
     ctx = img.new_context()
     paint = pixie.Paint(pixie.SOLID_PAINT)
-    paint.color = pixie.parse_color(color_line)
+    # color_line is now a pixie.Color object, not a string
+    paint.color = color_line if color_line else pixie.parse_color("#00AAFF")
     ctx.stroke_style = paint
     ctx.line_width = 3
 
@@ -749,7 +1032,7 @@ def draw_line_graph(img, data_slice, left_x, right_x, bottom_y, top_y,
 
 def draw_current_marker(img, data_slice, marker_position,
                         left_x, right_x, bottom_y, top_y,
-                        y_min, y_max):
+                        y_min, y_max, color_cache=None):
     """Draw vertical line at current time position."""
     if len(data_slice) == 0:
         return
@@ -761,7 +1044,7 @@ def draw_current_marker(img, data_slice, marker_position,
     # Draw vertical line
     ctx = img.new_context()
     paint_line = pixie.Paint(pixie.SOLID_PAINT)
-    paint_line.color = pixie.Color(1.0, 1.0, 1.0, 0.8)  # White, semi-transparent
+    paint_line.color = color_cache['white_semi'] if color_cache else pixie.Color(1.0, 1.0, 1.0, 0.8)
     ctx.stroke_style = paint_line
     ctx.line_width = 2
 
@@ -779,19 +1062,19 @@ def draw_current_marker(img, data_slice, marker_position,
         a, b = xytoab(x_screen, y_screen)
         ctx_dot = img.new_context()
         paint_dot = pixie.Paint(pixie.SOLID_PAINT)
-        paint_dot.color = pixie.Color(1.0, 1.0, 0.0, 1.0)  # Yellow
+        paint_dot.color = color_cache['yellow'] if color_cache else pixie.Color(1.0, 1.0, 0.0, 1.0)
         ctx_dot.fill_style = paint_dot
         ctx_dot.fill_rect(a-4, b-4, 8, 8)  # 8x8 pixel square
 
 
 def draw_y_axis_scale(img, left_x, bottom_y, top_y, y_min, y_max,
-                       num_ticks=5, font=None, unit=""):
+                       num_ticks=5, font=None, unit="", color_cache=None):
     """Draw Y-axis scale with tick marks and labels."""
     if font is None:
         font = pixie.read_font("Ubuntu-Regular_1.ttf")
 
     font.size = 14
-    font.paint.color = pixie.parse_color('#888888')
+    font.paint.color = color_cache['gray_light'] if color_cache else pixie.parse_color('#888888')
 
     for i in range(num_ticks):
         # Calculate y value and position
@@ -801,7 +1084,7 @@ def draw_y_axis_scale(img, left_x, bottom_y, top_y, y_min, y_max,
         # Draw tick mark (subtle)
         ctx = img.new_context()
         paint = pixie.Paint(pixie.SOLID_PAINT)
-        paint.color = pixie.Color(0.3, 0.3, 0.3, 0.6)
+        paint.color = color_cache['gray_medium'] if color_cache else pixie.Color(0.3, 0.3, 0.3, 0.6)
         ctx.stroke_style = paint
         ctx.line_width = 1
 
@@ -823,13 +1106,13 @@ def draw_y_axis_scale(img, left_x, bottom_y, top_y, y_min, y_max,
 
 
 def draw_x_axis_scale(img, center_x, left_x, right_x, bottom_y,
-                       time_window_sec=10, num_ticks=3, font=None):
+                       time_window_sec=10, num_ticks=3, font=None, color_cache=None):
     """Draw X-axis time scale in minutes format."""
     if font is None:
         font = pixie.read_font("Ubuntu-Regular_1.ttf")
 
     font.size = 16
-    font.paint.color = pixie.parse_color('#888888')
+    font.paint.color = color_cache['gray_light'] if color_cache else pixie.parse_color('#888888')
 
     # Convert seconds to minutes for display
     time_window_min = time_window_sec / 60.0
@@ -844,7 +1127,7 @@ def draw_x_axis_scale(img, center_x, left_x, right_x, bottom_y,
         # Draw tick mark (subtle)
         ctx = img.new_context()
         paint = pixie.Paint(pixie.SOLID_PAINT)
-        paint.color = pixie.Color(0.3, 0.3, 0.3, 0.6)
+        paint.color = color_cache['gray_medium'] if color_cache else pixie.Color(0.3, 0.3, 0.3, 0.6)
         ctx.stroke_style = paint
         ctx.line_width = 1
 
@@ -868,11 +1151,11 @@ def draw_x_axis_scale(img, center_x, left_x, right_x, bottom_y,
 
 
 def draw_graph_labels(img, title, unit, center_x, center_y,
-                      width, height, font):
+                      width, height, font, color_cache=None):
     """Draw title and unit labels."""
     # Title at top center
     font.size = 30
-    font.paint.color = pixie.parse_color('#CCCCCC')
+    font.paint.color = color_cache['very_light_gray'] if color_cache else pixie.parse_color('#CCCCCC')
     title_x = center_x - width // 2 + 100
     title_y = center_y + height // 2 + 30
     a, b = xytoab(title_x - 100, title_y)  # Offset for centering
@@ -892,9 +1175,9 @@ def draw_graph_labels(img, title, unit, center_x, center_y,
 def draw_time_series_graph(img, data_slice, marker_position,
                            center_x, center_y, width, height,
                            y_min, y_max,
-                           title, unit, color_line="#00AAFF",
+                           title, unit, color_line=None,
                            font=None, show_current_value=False, current_value=None,
-                           time_window_sec=300):
+                           time_window_sec=300, color_cache=None):
     """
     Draw a time-series graph on the image.
 
@@ -947,43 +1230,43 @@ def draw_time_series_graph(img, data_slice, marker_position,
     # Draw background rectangle (semi-transparent dark)
     ctx = img.new_context()
     paint_bg = pixie.Paint(pixie.SOLID_PAINT)
-    paint_bg.color = pixie.Color(0.1, 0.1, 0.1, 0.5)  # Dark semi-transparent
+    paint_bg.color = color_cache['bg_semi'] if color_cache else pixie.Color(0.1, 0.1, 0.1, 0.5)
     ctx.fill_style = paint_bg
     ctx.fill_rect(left_a, top_b, width, height)
 
     # Draw grid lines (horizontal reference lines)
     draw_grid_lines(img, left_x, right_x, bottom_y, top_y,
-                    y_min, y_max, num_lines=5)
+                    y_min, y_max, num_lines=5, color_cache=color_cache)
 
     # Draw Y-axis scale (left side)
     draw_y_axis_scale(img, left_x, bottom_y, top_y, y_min, y_max,
-                      num_ticks=5, font=font, unit=unit)
+                      num_ticks=5, font=font, unit=unit, color_cache=color_cache)
 
     # Draw X-axis scale (bottom)
     # Use the time_window_sec parameter passed to this function
     draw_x_axis_scale(img, center_x, left_x, right_x, bottom_y,
-                      time_window_sec=time_window_sec, num_ticks=3, font=font)
+                      time_window_sec=time_window_sec, num_ticks=3, font=font, color_cache=color_cache)
 
     # Draw axes border
     ctx = img.new_context()
     paint_border = pixie.Paint(pixie.SOLID_PAINT)
-    paint_border.color = pixie.Color(0.3, 0.3, 0.3, 1.0)  # Gray
+    paint_border.color = color_cache['gray_border'] if color_cache else pixie.Color(0.3, 0.3, 0.3, 1.0)
     ctx.stroke_style = paint_border
     ctx.line_width = 2
     ctx.stroke_rect(left_a, top_b, width, height)
 
     # Draw line graph
     draw_line_graph(img, data_slice, left_x, right_x, bottom_y, top_y,
-                    y_min, y_max, color_line)
+                    y_min, y_max, color_line, color_cache)
 
     # Draw current value marker (vertical line)
     draw_current_marker(img, data_slice, marker_position,
                         left_x, right_x, bottom_y, top_y,
-                        y_min, y_max)
+                        y_min, y_max, color_cache)
 
     # Draw labels
     draw_graph_labels(img, title, unit, center_x, center_y,
-                      width, height, font)
+                      width, height, font, color_cache)
 
     # Draw current value prominently if requested (above the graph like in reference)
     if show_current_value:
@@ -1001,7 +1284,7 @@ def draw_time_series_graph(img, data_slice, marker_position,
 
             # Display above the graph, centered
             font.size = 24
-            font.paint.color = pixie.parse_color('#FFFFFF')
+            font.paint.color = color_cache['white'] if color_cache else pixie.parse_color('#FFFFFF')
 
             # Position above graph, centered horizontally
             if title == "ALTITUDE":
@@ -1098,7 +1381,7 @@ def extract_time_window(data_array, current_index, window_frames):
 
 def add_time_series_graphs(img, current_index,
                             all_speed, all_vz, all_alti,
-                            graph_config, font):
+                            graph_config, font, color_cache):
     """
     Add all three time-series graphs to the image.
 
@@ -1114,6 +1397,8 @@ def add_time_series_graphs(img, current_index,
         Precomputed graph parameters
     font : pixie.Font
         Font for labels
+    color_cache : dict
+        Pre-parsed colors to avoid re-parsing each frame
 
     Returns:
     --------
@@ -1144,11 +1429,12 @@ def add_time_series_graphs(img, current_index,
         y_min=graph_config['alti_min'],
         y_max=graph_config['alti_max'],
         title="ALTITUDE", unit="m",
-        color_line="#4CAF50",  # Green
+        color_line=color_cache['green'],
         font=font,
         show_current_value=True,
         current_value=alti_slice[alti_marker] if alti_marker < len(alti_slice) else None,
-        time_window_sec=time_window_sec
+        time_window_sec=time_window_sec,
+        color_cache=color_cache
     )
 
     # Draw vario graph (center of trio)
@@ -1159,11 +1445,12 @@ def add_time_series_graphs(img, current_index,
         y_min=graph_config['vz_min'],
         y_max=graph_config['vz_max'],
         title="VARIO", unit="m/s",
-        color_line="#FF5722",  # Red/Orange
+        color_line=color_cache['red_orange'],
         font=font,
         show_current_value=True,
         current_value=vz_slice[vz_marker] if vz_marker < len(vz_slice) else None,
-        time_window_sec=time_window_sec
+        time_window_sec=time_window_sec,
+        color_cache=color_cache
     )
 
     # Draw speed graph (rightmost)
@@ -1174,11 +1461,12 @@ def add_time_series_graphs(img, current_index,
         y_min=graph_config['speed_min'],
         y_max=graph_config['speed_max'],
         title="SPEED", unit="km/h",
-        color_line="#2196F3",  # Blue
+        color_line=color_cache['blue'],
         font=font,
         show_current_value=True,
         current_value=speed_slice[speed_marker] if speed_marker < len(speed_slice) else None,
-        time_window_sec=time_window_sec
+        time_window_sec=time_window_sec,
+        color_cache=color_cache
     )
 
     return img
@@ -1209,40 +1497,47 @@ if __name__ == '__main__':
 
     # Process data (same for both modes)
     print('def ok')
-    all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url if not TEST_MODE else None,
-                                                       file_path=igc_source)
+
+    with timer("1. Read IGC file"):
+        all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url if not TEST_MODE else None,
+                                                           file_path=igc_source)
     print('\n process_igc ok')
 
-    all_speed_smooth, all_vz_smooth, all_alti_smooth = smooth_igc_output([all_speed, all_vz, all_alti])
+    with timer("2. Smooth data (Hanning window)"):
+        all_speed_smooth, all_vz_smooth, all_alti_smooth = smooth_igc_output([all_speed, all_vz, all_alti])
     print('igc smoothed')
 
-    all_vz2 = np.zeros(all_alti_smooth.shape[0])
-    for i, alti in enumerate(list(all_alti_smooth)):
-        if i >= all_alti_smooth.shape[0] - 1:
-            pass
-        else:
-            all_vz2[i] = all_alti_smooth[i + 1] - all_alti_smooth[i]
-
+    with timer("3. Compute vario from altitude"):
+        all_vz2 = np.zeros(all_alti_smooth.shape[0])
+        for i, alti in enumerate(list(all_alti_smooth)):
+            if i >= all_alti_smooth.shape[0] - 1:
+                pass
+            else:
+                all_vz2[i] = all_alti_smooth[i + 1] - all_alti_smooth[i]
     print('smoothed vario ok')
 
     speed_vid = all_speed_smooth
     vz_vid = all_vz2
     alti_vid = all_alti_smooth
-    time_vid = convert_time_to_sec(all_time)
+
+    with timer("4. Convert time to seconds"):
+        time_vid = convert_time_to_sec(all_time)
     print('time to sec ok')
 
-    time_vid_reshaped = reshape_array(time_vid, time_vid)
-    time_vid_full_reshaped = reshape_array(all_time, all_time)
-    speed_vid_reshaped = reshape_array(speed_vid, time_vid)
-    vz_vid_reshaped = reshape_array(vz_vid, time_vid)
-    alti_vid_reshaped = reshape_array(alti_vid, time_vid)
+    with timer("5. Reshape arrays to 24fps"):
+        time_vid_reshaped = reshape_array(time_vid, time_vid)
+        time_vid_full_reshaped = reshape_array(all_time, all_time)
+        speed_vid_reshaped = reshape_array(speed_vid, time_vid)
+        vz_vid_reshaped = reshape_array(vz_vid, time_vid)
+        alti_vid_reshaped = reshape_array(alti_vid, time_vid)
     print('reshaped ok')
 
     # Compute graph parameters
-    graph_config = compute_graph_parameters(
-        speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
-        speed_acc=speed_acc, fps=24
-    )
+    with timer("6. Compute graph parameters"):
+        graph_config = compute_graph_parameters(
+            speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
+            speed_acc=speed_acc, fps=24
+        )
     print('graph config computed')
     print(f"  Time window: +/-{graph_config['time_window_sec']/speed_acc:.2f} real seconds = {graph_config['time_window_frames']} frames")
     print(f"  Speed range: {graph_config['speed_min']:.1f} - {graph_config['speed_max']:.1f} km/h")
@@ -1261,20 +1556,25 @@ if __name__ == '__main__':
         # Save 30th frame only
         print(f"\nSaving frame 30 as {output_name}...")
         target_frame = 29  # 0-indexed
-        for i, frame in enumerate(img_gen):
-            if i == target_frame:
-                img_pil = Image.fromarray(frame, 'RGB')
-                img_pil.save(output_name)
-                print(f"[OK] Frame {target_frame + 1} saved as {output_name}")
-                break
-            elif i > target_frame:
-                break
+        with timer("7. Generate test frame"):
+            for i, frame in enumerate(img_gen):
+                if i == target_frame:
+                    img_pil = Image.fromarray(frame, 'RGB')
+                    img_pil.save(output_name)
+                    print(f"[OK] Frame {target_frame + 1} saved as {output_name}")
+                    break
+                elif i > target_frame:
+                    break
         print("\nPour générer la vidéo complète, mettez TEST_MODE = False")
     else:
         # Save full video
         print(f"\nGenerating video: {output_name}")
-        m.write_video(output_name, img_gen, fps=24, qp=qualite_compression)
+        with timer("7. Generate and encode video"):
+            m.write_video(output_name, img_gen, fps=24, qp=qualite_compression)
         print(f"\nVideo ok: {output_name}")
+
+    # Print performance summary
+    print_performance_summary()
 
 
 
