@@ -1,10 +1,12 @@
+
+from multiprocessing import Pool, cpu_count
+
 # Configure only this:
 
 # MODE TEST
 TEST_MODE = False  # True = Generates test_overlay.png, False = generates video
 
-# TODO: make auto switch between summer/winter saving time
-HEURE_ETE = 1  # Add 1 if summer time
+# Configuration
 TOTAL_FLIGHT_DIST = 78  # Total distance with "3 points de contournenment"
 speed_acc = 16  # Acceleration factor for video, typically x16
 
@@ -14,6 +16,10 @@ file_url =  None #"https://www.syride.com/scripts/downloadIGC.php?idSession=2121
 # file_path = r"C:\Users\sirde\Dropbox\Parapente\Vercofly\Tracks 2025\CEDRIC-GERBER (2).igc"
 file_path = r"2025-09-27-XCT-CGE-13.igc"
 qualite_compression = 15  # valeur à augmenter pour avoir une meilleure qualité, 10 est bien suffisant
+
+# Configuration for parallel processing
+USE_PARALLEL = False  # Set to False to disable parallel processing (I sometimes have Memory error with it)
+NUM_WORKERS = cpu_count()  # Use all CPU cores (set to a specific number if needed)
 
 ##
 # Do not touch below
@@ -31,53 +37,18 @@ from datetime import datetime
 from tqdm import tqdm
 import numpy as np
 from math import sin, cos, sqrt, atan2, radians
-from datetime import date as date_creator
+from datetime import date as date_creator, timezone as dt_timezone
 from aerofiles.igc import Reader
 from scipy.interpolate import interp1d
 from PIL import Image
 import requests
-import time
-from contextlib import contextmanager
-from multiprocessing import Pool, cpu_count
 from functools import partial
 
 
 A = 1920
 B = 1080
 
-# Performance tracking
-performance_times = {}
 
-# Configuration for parallel processing
-USE_PARALLEL = True  # Set to False to disable parallel processing
-NUM_WORKERS = cpu_count()  # Use all CPU cores (set to a specific number if needed)
-
-@contextmanager
-def timer(name):
-    """Context manager to measure execution time of code blocks."""
-    start = time.time()
-    yield
-    elapsed = time.time() - start
-    performance_times[name] = elapsed
-    print(f"[PERF] {name}: {elapsed:.2f}s")
-
-def print_performance_summary():
-    """Print a summary of all performance measurements."""
-    print("\n" + "=" * 60)
-    print("PERFORMANCE SUMMARY")
-    print("=" * 60)
-    if USE_PARALLEL:
-        print(f"  Parallel processing: ENABLED ({NUM_WORKERS} workers)")
-    else:
-        print(f"  Parallel processing: DISABLED")
-    print("=" * 60)
-    total = sum(performance_times.values())
-    for name, elapsed in performance_times.items():
-        percentage = (elapsed / total * 100) if total > 0 else 0
-        print(f"  {name:.<50} {elapsed:>6.2f}s ({percentage:>5.1f}%)")
-    print("-" * 60)
-    print(f"  {'TOTAL':.<50} {total:>6.2f}s")
-    print("=" * 60)
 
 
 def abtoxy(a, b=None):
@@ -684,13 +655,24 @@ def str60(x):
         return str(x)
 
 
-def timesec_to_string(tsec, h_ete=0):
+def timesec_to_string(tsec):
+    """
+    Convert time in seconds to display string (HH:MM format).
+
+    Parameters:
+    -----------
+    tsec : float
+        Time in seconds since midnight
+
+    Returns:
+    --------
+    str : Time string in "HHhMM" format
+    """
     h = tsec // 3600
     tsec = tsec - h * 3600
     m = tsec // 60
-    s = int(tsec - 6 * 60)
 
-    return str60(int(h) + h_ete) + 'h' + str60(int(m))
+    return str60(int(h)) + 'h' + str60(int(m))
 
 
 def generate_single_frame(i, all_speed, all_vz, all_alti, all_time, all_time_full, graph_config, font_cache, color_cache):
@@ -722,9 +704,9 @@ def generate_single_frame(i, all_speed, all_vz, all_alti, all_time, all_time_ful
     img = Image.new('RGB', (A, B), color='black')
     draw = ImageDraw.Draw(img, 'RGBA')
 
-    # Add text overlays
-    add_time_to_img_pil(img, draw, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font_cache, color_cache)
-    add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font_cache, color_cache)
+    # Add text overlays (time already converted to local timezone in read_igc)
+    add_time_to_img_pil(img, draw, timesec_to_string(all_time[i]), font_cache, color_cache)
+    add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0]), font_cache, color_cache)
     add_flight_dist_to_img_pil(img, draw, str(int(
         TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font_cache, color_cache)
 
@@ -835,9 +817,6 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
             for frame_array in tqdm(pool.imap(worker_func, frame_indices), total=frame_count):
                 yield frame_array
 
-        # Note: Detailed timing not available in parallel mode
-        performance_times['  - Frame generation (parallel)'] = 0  # Timing captured in step 7
-
     else:
         # Sequential processing mode (for small videos or when parallel is disabled)
         if not USE_PARALLEL:
@@ -845,54 +824,49 @@ def gen_img_from_smoothed_list(all_speed, all_vz, all_alti, all_time, all_time_f
         else:
             print(f"Too few frames ({frame_count}) for parallel processing, using sequential mode...")
 
-        # Track internal timings
-        time_image_creation = 0
-        time_text_overlay = 0
-        time_graph_overlay = 0
-        time_file_io = 0
-
         for i in tqdm(range(frame_count)):
             # Create blank black background using Pillow
-            t0 = time.time()
             img = Image.new('RGB', (A, B), color='black')
             draw = ImageDraw.Draw(img, 'RGBA')  # Enable alpha for semi-transparent colors
-            time_image_creation += time.time() - t0
 
-            # Add text overlays
-            t0 = time.time()
-            add_time_to_img_pil(img, draw, timesec_to_string(all_time[i], h_ete=HEURE_ETE), font_cache, color_cache)
-            add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0], h_ete=0), font_cache, color_cache)
+            # Add text overlays (time already converted to local timezone in read_igc)
+            add_time_to_img_pil(img, draw, timesec_to_string(all_time[i]), font_cache, color_cache)
+            add_flight_time_to_img_pil(img, draw, timesec_to_string(all_time[i] - all_time_full[0]), font_cache, color_cache)
             add_flight_dist_to_img_pil(img, draw, str(int(
                 TOTAL_FLIGHT_DIST * (all_time[i] - all_time_full[0]) / (all_time_full[-1] - all_time_full[0]))), font_cache, color_cache)
-            time_text_overlay += time.time() - t0
 
             # Add time-series graphs if configured
             if graph_config is not None:
-                t0 = time.time()
                 add_time_series_graphs_pil(
                     img, draw, i,
                     all_speed, all_vz, all_alti,
                     graph_config, font_cache, color_cache
                 )
-                time_graph_overlay += time.time() - t0
 
-            # Direct numpy conversion - NO FILE I/O!
-            t0 = time.time()
+            # Direct numpy conversion
             frame_array = np.array(img)
-            time_file_io += time.time() - t0
 
             yield frame_array
-
-        # Store detailed frame generation metrics (sequential mode only)
-        if frame_count > 0:
-            performance_times['  - Image creation'] = time_image_creation
-            performance_times['  - Text overlay'] = time_text_overlay
-            performance_times['  - Graph overlay'] = time_graph_overlay
-            performance_times['  - File I/O (write+read)'] = time_file_io
 
 
 
 def smooth(x, window_len=11, window='hanning'):
+    """
+    Smooth a 1D signal using a window function.
+
+    Parameters:
+    -----------
+    x : numpy.ndarray
+        Input 1D signal to smooth
+    window_len : int, optional
+        Size of the smoothing window (default: 11)
+    window : str, optional
+        Type of window function: 'flat', 'hanning', 'hamming', 'bartlett', 'blackman' (default: 'hanning')
+
+    Returns:
+    --------
+    numpy.ndarray : Smoothed signal
+    """
     if x.ndim != 1:
         raise ValueError("smooth only accepts 1 dimension arrays.")
     if x.size < window_len:
@@ -919,7 +893,23 @@ def get_date_time_dif(start_time, stop_time):
 
 
 def compute_dist(lat1, lon1, lat2, lon2, rad=True):
-    if not (rad):
+    """
+    Calculate the distance between two GPS coordinates using the Haversine formula.
+
+    Parameters:
+    -----------
+    lat1, lon1 : float
+        First coordinate (latitude, longitude)
+    lat2, lon2 : float
+        Second coordinate (latitude, longitude)
+    rad : bool, optional
+        If False, coordinates are in degrees and will be converted to radians (default: True)
+
+    Returns:
+    --------
+    float : Distance in meters
+    """
+    if not rad:
         lat1 = radians(lat1)
         lon1 = radians(lon1)
         lat2 = radians(lat2)
@@ -948,19 +938,58 @@ def get_all_time_end():
             print(file_name, d)
 
 
-# TODO: Document this
-def remove_zero_from_alti(alti):
-    if alti[0] < 10:
-        alti[0] = (alti[1] + alti[2]) / 2
-    if alti[-1] < 10:
-        alti[-1] = (alti[-2] + alti[-3]) / 2
-    for i, alt in enumerate(alti):
+def remove_zero_from_alti(altis):
+    """
+    Clean invalid altitude readings by interpolating from neighboring values.
+
+    IGC files sometimes contain erroneous altitude values (< 10m). This function
+    replaces these invalid readings with the average of adjacent valid readings.
+
+    Parameters:
+    -----------
+    altis : numpy.ndarray
+        Array of altitude values in meters
+
+    Returns:
+    --------
+    numpy.ndarray : Cleaned altitude array with invalid values interpolated
+    """
+    if altis[0] < 10:
+        altis[0] = (altis[1] + altis[2]) / 2
+    if altis[-1] < 10:
+        altis[-1] = (altis[-2] + altis[-3]) / 2
+    for i, alt in enumerate(altis):
         if alt < 10:
-            alti[i] = (alti[i - 1] + alti[i + 1]) / 2
-    return alti
+            altis[i] = (altis[i - 1] + altis[i + 1]) / 2
+    return altis
 
 
 def read_igc(file_url=None, file_path=None):
+    """
+    Parse an IGC flight file and calculate flight metrics (speed, vertical speed, altitude).
+
+    Reads an IGC file from either a URL or local path, automatically detects the timezone
+    from GPS coordinates, and computes speed, vertical speed, and altitude for each track point.
+
+    Parameters:
+    -----------
+    file_url : str, optional
+        URL to download the IGC file from
+    file_path : str, optional
+        Local file path to the IGC file
+
+    Returns:
+    --------
+    tuple : (all_speed, all_vz, all_alti, all_time)
+        all_speed : numpy.ndarray
+            Ground speed at each point in km/h (capped at 100 km/h)
+        all_vz : numpy.ndarray
+            Vertical speed at each point in m/s
+        all_alti : numpy.ndarray
+            GPS altitude at each point in meters (cleaned from invalid values)
+        all_time : list
+            Local datetime for each point (timezone-adjusted from GPS location)
+    """
     if file_url is not None:
         igc = requests.get(file_url)
         print("Getting ", file_url)
@@ -973,6 +1002,28 @@ def read_igc(file_url=None, file_path=None):
     assert(len(parsed_igc_file['fix_records'][1]) > 0)
 
     print('igc_file read')
+
+    # Get flight date and first GPS position for timezone detection
+    first_record = parsed_igc_file['fix_records'][1][0]
+    first_lat = first_record.get('lat', None)
+    first_lon = first_record.get('lon', None)
+
+
+    # Print detected timezone info
+    tz_name = None
+    if first_lat and first_lon:
+        print(f"Flight location: {first_lat:.4f}°, {first_lon:.4f}°")
+        try:
+            from timezonefinder import TimezoneFinder
+            import pytz
+            tf = TimezoneFinder()
+            tz_name_str = tf.timezone_at(lat=first_lat, lng=first_lon)
+            if tz_name_str:
+                print(f"Detected timezone: {tz_name_str}")
+                tz_name = pytz.timezone(tz_name_str)
+        except:
+            pass
+
     previous_lat = 0
     previous_lon = 0
 
@@ -982,7 +1033,9 @@ def read_igc(file_url=None, file_path=None):
     all_time = [0 for _ in range(len(parsed_igc_file['fix_records'][1]))]
 
     for i, record in tqdm(enumerate(parsed_igc_file['fix_records'][1])):
-        record['time'] = record['time'].replace(hour=record['time'].hour + 1)
+        # Convert UTC datetime from IGC to local timezone (auto-detects from GPS coordinates)
+        record['time'] = record['datetime'].replace(tzinfo=dt_timezone.utc).astimezone(tz_name)
+
         if previous_lon == 0:
             # Init previous value with first record
             previous_lat = record['lat']
@@ -995,7 +1048,7 @@ def read_igc(file_url=None, file_path=None):
             dxy = abs(compute_dist(previous_lat, previous_lon, record['lat'], record['lon'], rad=False))
             dz = previous_alt_baro - record['pressure_alt']
             dz = previous_alt_gps - record['gps_alt']
-            dt = get_date_time_dif(record['time'], previous_datetime)
+            dt = (record['time'] - previous_datetime).total_seconds()
             if dt > 1: print('Delta T between points > 1 at time %s: : %s' % (record['time'], dt))
 
             all_speed[i] = min(100, sqrt(dxy ** 2 + 0 * dz ** 2) / dt * 3.6)
@@ -1014,6 +1067,20 @@ def read_igc(file_url=None, file_path=None):
 
 
 def reshape_array(arr, time_vid):
+    """
+    Interpolate data array to match video frame rate (24 fps) with acceleration factor.
+
+    Parameters:
+    -----------
+    arr : numpy.ndarray
+        Input data array to interpolate
+    time_vid : numpy.ndarray
+        Time points corresponding to the data
+
+    Returns:
+    --------
+    numpy.ndarray : Interpolated data at video frame rate
+    """
     nb_img_by_sec = 24
 
     t_true = np.linspace(time_vid[0], time_vid[-1], num=len(time_vid), endpoint=True)
@@ -1024,6 +1091,21 @@ def reshape_array(arr, time_vid):
 
 
 def smooth_igc_output(L_all):
+    """
+    Smooth all IGC output arrays (speed, vario, altitude) using Hanning window.
+
+    Applies smoothing to reduce noise in the data and sets the first value to the
+    mean of the first 10% of data points for stability.
+
+    Parameters:
+    -----------
+    L_all : list of numpy.ndarray
+        List containing data arrays to smooth
+
+    Returns:
+    --------
+    list : Smoothed arrays
+    """
     all_ret = []
     for l_val in L_all:
         l_val[0] = np.mean(l_val[:int(len(l_val) / 10)])
@@ -1591,46 +1673,40 @@ if __name__ == '__main__':
     urllib.request.urlretrieve("https://github.com/treeform/pixie-python/raw/master/examples/data/Ubuntu-Regular_1.ttf",
                                "Ubuntu-Regular_1.ttf")
 
-    with timer("1. Read IGC file"):
-        all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url if not TEST_MODE else None,
-                                                           file_path=igc_source)
-    print('\n process_igc ok')
+    all_speed, all_vz, all_alti, all_time = read_igc(file_url=file_url if not TEST_MODE else None,
+                                                       file_path=igc_source)
+    print('process_igc ok')
 
-    with timer("2. Smooth data (Hanning window)"):
-        all_speed_smooth, all_vz_smooth, all_alti_smooth = smooth_igc_output([all_speed, all_vz, all_alti])
+    all_speed_smooth, all_vz_smooth, all_alti_smooth = smooth_igc_output([all_speed, all_vz, all_alti])
     print('igc smoothed')
 
-    with timer("3. Compute vario from altitude"):
-        all_vz2 = np.zeros(all_alti_smooth.shape[0])
-        for i, alti in enumerate(list(all_alti_smooth)):
-            if i >= all_alti_smooth.shape[0] - 1:
-                pass
-            else:
-                all_vz2[i] = all_alti_smooth[i + 1] - all_alti_smooth[i]
+    all_vz2 = np.zeros(all_alti_smooth.shape[0])
+    for i, alti in enumerate(list(all_alti_smooth)):
+        if i >= all_alti_smooth.shape[0] - 1:
+            pass
+        else:
+            all_vz2[i] = all_alti_smooth[i + 1] - all_alti_smooth[i]
     print('smoothed vario ok')
 
     speed_vid = all_speed_smooth
     vz_vid = all_vz2
     alti_vid = all_alti_smooth
 
-    with timer("4. Convert time to seconds"):
-        time_vid = convert_time_to_sec(all_time)
+    time_vid = convert_time_to_sec(all_time)
     print('time to sec ok')
 
-    with timer("5. Reshape arrays to 24fps"):
-        time_vid_reshaped = reshape_array(time_vid, time_vid)
-        time_vid_full_reshaped = reshape_array(all_time, all_time)
-        speed_vid_reshaped = reshape_array(speed_vid, time_vid)
-        vz_vid_reshaped = reshape_array(vz_vid, time_vid)
-        alti_vid_reshaped = reshape_array(alti_vid, time_vid)
+    time_vid_reshaped = reshape_array(time_vid, time_vid)
+    time_vid_full_reshaped = reshape_array(all_time, all_time)
+    speed_vid_reshaped = reshape_array(speed_vid, time_vid)
+    vz_vid_reshaped = reshape_array(vz_vid, time_vid)
+    alti_vid_reshaped = reshape_array(alti_vid, time_vid)
     print('reshaped ok')
 
     # Compute graph parameters
-    with timer("6. Compute graph parameters"):
-        graph_config = compute_graph_parameters(
-            speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
-            speed_acc=speed_acc, fps=24
-        )
+    graph_config = compute_graph_parameters(
+        speed_vid_reshaped, vz_vid_reshaped, alti_vid_reshaped,
+        speed_acc=speed_acc, fps=24
+    )
     print('graph config computed')
     print(f"  Time window: +/-{graph_config['time_window_sec']/speed_acc:.2f} real seconds = {graph_config['time_window_frames']} frames")
     print(f"  Speed range: {graph_config['speed_min']:.1f} - {graph_config['speed_max']:.1f} km/h")
@@ -1649,28 +1725,18 @@ if __name__ == '__main__':
         # Save 30th frame only
         print(f"\nSaving frame 30 as {output_name}...")
         target_frame = 29  # 0-indexed
-        with timer("7. Generate test frame"):
-            for i, frame in enumerate(img_gen):
-                if i == target_frame:
-                    img_pil = Image.fromarray(frame, 'RGB')
-                    img_pil.save(output_name)
-                    print(f"[OK] Frame {target_frame + 1} saved as {output_name}")
-                    break
-                elif i > target_frame:
-                    break
+        for i, frame in enumerate(img_gen):
+            if i == target_frame:
+                img_pil = Image.fromarray(frame, 'RGB')
+                img_pil.save(output_name)
+                print(f"[OK] Frame {target_frame + 1} saved as {output_name}")
+                break
+            elif i > target_frame:
+                break
         print("\nPour générer la vidéo complète, mettez TEST_MODE = False")
     else:
         # Save full video
         print(f"\nGenerating video: {output_name}")
-        with timer("7. Generate and encode video"):
-            m.write_video(output_name, img_gen, fps=24, qp=qualite_compression)
+        m.write_video(output_name, img_gen, fps=24, qp=qualite_compression)
         print(f"\nVideo ok: {output_name}")
-
-    # Print performance summary
-    print_performance_summary()
-
-
-
-
-
 

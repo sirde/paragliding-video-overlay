@@ -12,19 +12,18 @@ This project generates video overlays displaying real-time flight data:
 ## Prerequisites
 
 ```bash
-pip install mediapy pixie-python numpy matplotlib aerofiles scipy pillow requests tqdm
+pip install mediapy pixie-python numpy matplotlib aerofiles scipy pillow requests tqdm timezonefinder pytz
 ```
 
 ## Configuration
 
-Edit the first 4 lines in `igc_to_overlay.py`:
+Edit the configuration section in `igc_to_overlay.py`:
 
 ```python
 # TEST MODE
 TEST_MODE = False  # True = Test image, False = Full video
 
 # Parameters
-HEURE_ETE = 1  # Add 1 if summer time (daylight saving)
 TOTAL_FLIGHT_DIST = 78  # Total distance (km) with turnpoints
 speed_acc = 16  # Video acceleration factor (16x)
 
@@ -33,7 +32,13 @@ file_url = None  # or "https://..."
 file_path = r"C:\path\to\file.igc"
 
 qualite_compression = 15  # Video quality (10-20, higher = better quality)
+
+# Performance
+USE_PARALLEL = True  # Enable multiprocessing for faster frame generation
+NUM_WORKERS = cpu_count()  # Number of CPU cores to use
 ```
+
+**Note**: Timezone is automatically detected from GPS coordinates - no manual adjustment needed!
 
 ## Usage
 
@@ -83,6 +88,11 @@ Overlay/
 
 ## Features
 
+### Automatic Timezone Detection
+- Detects timezone from GPS coordinates at flight start
+- Automatically handles Daylight Saving Time (DST)
+- No manual timezone configuration required
+
 ### Graphs
 - **Altitude** (green): Displays GPS altitude in meters
 - **Vario** (orange): Vertical speed in m/s
@@ -96,7 +106,7 @@ Each graph displays:
 - Current value displayed above the graph
 
 ### Display Information
-- **HOUR**: Local time (adjusted with HEURE_ETE)
+- **HOUR**: Local time (automatically detected from GPS coordinates with DST support)
 - **FLIGHT TIME**: Flight duration
 - **FLIGHT DIST**: Distance traveled (interpolated)
 
